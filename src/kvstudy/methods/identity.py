@@ -27,3 +27,6 @@ class IdentityMethod:
         if measured != analytic:
             raise AssertionError(f"bf16 cache holds {measured} bytes; analytic prediction is {analytic}")
         return analytic
+
+    def convert_real(self, cache: list[Any], arch: Arch) -> list[Any]:
+        return cache  # BF16 KVCache, unchanged

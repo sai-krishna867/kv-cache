@@ -1,0 +1,65 @@
+# systems_real: packed storage, measured cache buffers and MLX memory, timed prefill /
+# conversion / question / decode. No BF16 reference is retained. Fixed 64-token decode.
+schema_version: 1
+name: systems_real
+
+model:
+  backend: mlx
+  id: Qwen/Qwen3-4B
+  revision: 1cfa9a7208912126459214e8b04321603b3df60c
+  weight_dtype: bfloat16
+
+execution:
+  mode: systems_real
+  seed: 42
+  systems:
+    warmup_runs: 1
+    repeats: 3
+    decode_tokens: 64
+
+protocol:
+  prefill_dtype: bfloat16
+  conversion_point: after_context_before_question
+  key_position: post_rope
+  protected_window:
+    tokens: 512
+    precision_bits: 8
+    overflow: demote_oldest
+
+benchmarks:
+  - name: ruler
+    split_manifest: data/manifests/ruler_qwen3-4b_selective_s42/ruler_dev.jsonl
+    tasks: [vt]
+    context_lengths: [4096, 8192, 16384]
+    max_new_tokens: 128
+    max_examples_per_cell: 2
+
+methods:
+  - id: B0
+    kind: identity
+
+  - id: U4          # 4.5 bits
+    kind: uniform
+    key_bits: 4
+    value_bits: 4
+    group_size: 64
+    axis: per_token
+
+  - id: U2          # 2.5 bits
+    kind: uniform
+    key_bits: 2
+    value_bits: 2
+    group_size: 64
+    axis: per_token
+
+  - id: Q82         # selective 8/2, 3.494 bits
+    kind: selective
+    selector: quantization_residual
+    high_bits: 8
+    low_bits: 2
+    high_fraction: 0.164
+    group_size: 64
+    axis: per_token
+
+output:
+  root: results

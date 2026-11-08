@@ -22,6 +22,7 @@ from kvstudy.config import ExperimentConfig, config_hash, config_to_dict
 from kvstudy.records import PROTOCOL_ID, Example, ResultRecord, append_jsonl
 
 TIMINGS_LABEL = "quality_simulated wall-clock; not a systems measurement"
+SYSTEMS_TIMINGS_LABEL = "systems_real: median over repeats after warm-ups; computation forced at every timer boundary"
 PACKAGES = ["kvstudy", "mlx", "mlx-metal", "mlx-lm", "transformers", "tokenizers", "huggingface-hub", "pydantic", "numpy", "pyyaml"]
 
 
@@ -205,8 +206,15 @@ def run(cfg: ExperimentConfig) -> Path:
     print(f"run directory: {run_dir}")
 
     todo = [(bench, adapter, ex, [(m_cfg, m, 1) for m_cfg, m in methods]) for bench, adapter, examples in plan for ex in examples]
-    _execute(cfg, run_dir, run_id, loaded, todo)
+    _dispatch(cfg, run_dir, run_id, loaded, todo)
     return run_dir
+
+
+def _dispatch(cfg: ExperimentConfig, run_dir: Path, run_id: str, loaded: Any, todo: list) -> None:
+    if cfg.execution.mode == "systems_real":
+        _execute_systems(cfg, run_dir, run_id, loaded, todo)
+    else:
+        _execute(cfg, run_dir, run_id, loaded, todo)
 
 
 def latest_records(run_dir: Path, method_ids: list[str]) -> dict[tuple[str, str], dict[str, Any]]:
@@ -290,7 +298,7 @@ def resume(run_dir: Path, retry_failed: bool = False) -> Path:
         },
     )
     print(f"resuming {run_dir}: {sum(len(p) for *_, p in todo)} pending runs")
-    _execute(cfg, run_dir, run_id, loaded, todo)
+    _dispatch(cfg, run_dir, run_id, loaded, todo)
     return run_dir
 
 
@@ -411,6 +419,133 @@ def _execute(cfg: ExperimentConfig, run_dir: Path, run_id: str, loaded: Any, tod
                 print(f"[{i}/{len(todo)}] {ex.example_id} {method_cfg.id}: {shown}")
             del reference
             mx.clear_cache()
+    except KeyboardInterrupt:
+        append_jsonl(
+            events, {"event": "run_interrupted", "time_utc": datetime.now(timezone.utc).isoformat(), "counts": counts}
+        )
+        raise
+
+    append_jsonl(
+        events,
+        {"event": "run_finished", "time_utc": datetime.now(timezone.utc).isoformat(), "counts": counts},
+    )
+    summarize_run(run_dir)
+
+
+def _execute_systems(cfg: ExperimentConfig, run_dir: Path, run_id: str, loaded: Any, todo: list) -> None:
+    """systems_real: per (example, method), fresh BF16 prefill, real conversion, fixed-length decode.
+
+    No BF16 reference is retained, so memory reflects deployment. Each run repeats
+    warmup_runs + repeats times; timings are medians over the repeats.
+    """
+    import statistics
+
+    import mlx.core as mx
+
+    from kvstudy.analysis.compare import summarize_run
+    from kvstudy.backends import mlx as backend
+
+    sysc = cfg.execution.systems
+    events = run_dir / "events.jsonl"
+    counts = {"ok": 0, "failed": 0, "oom": 0}
+    try:
+        for i, (bench, adapter, ex, pending) in enumerate(todo, 1):
+            prompt = backend.render_prompt(
+                loaded.tokenizer,
+                backend.SYSTEM_PROMPT,
+                adapter.user_text(ex),
+                adapter.question_char_offset(ex),
+                adapter.answer_prefix(ex),
+            )
+            ids, boundary = prompt.token_ids, prompt.boundary
+            base = dict(
+                run_id=run_id,
+                example_id=ex.example_id,
+                source_id=ex.source_id,
+                model_id=cfg.model.id,
+                model_revision=loaded.revision,
+                protocol_id=PROTOCOL_ID,
+                benchmark=ex.benchmark,
+                task=ex.task,
+                split=ex.split,
+                context_length=adapter.context_length(ex),
+                references=ex.references,
+                n_input_tokens=len(ids),
+                n_context_tokens=boundary,
+                n_question_tokens=len(ids) - boundary,
+            )
+            for method_cfg, method, attempt in pending:
+                try:
+                    reps = []
+                    for rep in range(sysc.warmup_runs + sysc.repeats):
+                        cache = None
+                        mx.clear_cache()
+                        mx.reset_peak_memory()
+                        t0 = time.perf_counter()
+                        cache = backend.prefill(loaded.model, ids[:boundary])
+                        prefill_s = time.perf_counter() - t0
+                        bf16_bytes = backend.cache_buffer_bytes(cache)
+                        t0 = time.perf_counter()
+                        cache = method.convert_real(cache, loaded.arch)
+                        mx.eval([c.state for c in cache])
+                        convert_s = time.perf_counter() - t0
+                        mx.clear_cache()
+                        converted_bytes = backend.cache_buffer_bytes(cache)
+                        active_bytes = mx.get_active_memory()
+                        tokens, question_s, decode_s = backend.generate_fixed(
+                            loaded.model, ids[boundary:], cache, sysc.decode_tokens
+                        )
+                        reps.append(
+                            {
+                                "prefill_context": prefill_s,
+                                "convert": convert_s,
+                                "question_prefill": question_s,
+                                "decode": decode_s,
+                                "bf16_cache_bytes": bf16_bytes,
+                                "cache_bytes": converted_bytes,
+                                "cache_bytes_final": backend.cache_buffer_bytes(cache),
+                                "active_bytes_after_convert": active_bytes,
+                                "peak_bytes": mx.get_peak_memory(),
+                                "tokens": tokens,
+                            }
+                        )
+                        del cache
+                    measured = reps[sysc.warmup_runs :]
+                    med = {k: statistics.median(r[k] for r in measured) for k in ("prefill_context", "convert", "question_prefill", "decode")}
+                    record = ResultRecord(
+                        **base,
+                        method_id=method_cfg.id,
+                        status="ok",
+                        attempt=attempt,
+                        prediction=loaded.tokenizer.decode(measured[-1]["tokens"]),
+                        n_generated_tokens=sysc.decode_tokens,
+                        cache_bytes_estimated=measured[-1]["cache_bytes"],
+                        cache_bytes_label="measured_cache_buffers",
+                        memory_bytes={
+                            "bf16_cache_before_conversion": measured[-1]["bf16_cache_bytes"],
+                            "cache_after_conversion": measured[-1]["cache_bytes"],
+                            "cache_after_decode": measured[-1]["cache_bytes_final"],
+                            "mlx_active_after_conversion": max(r["active_bytes_after_convert"] for r in measured),
+                            "mlx_peak": max(r["peak_bytes"] for r in measured),
+                        },
+                        timings_s={**med, "decode_tokens_per_s": (sysc.decode_tokens - 1) / med["decode"]},
+                        timings_label=SYSTEMS_TIMINGS_LABEL,
+                        metadata={
+                            "boundary_straddled": prompt.boundary_straddled,
+                            "warmup_runs": sysc.warmup_runs,
+                            "repeats": [{k: v for k, v in r.items() if k != "tokens"} for r in measured],
+                            "outputs_identical_across_repeats": all(r["tokens"] == measured[0]["tokens"] for r in measured),
+                        },
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    record = ResultRecord(
+                        **base, method_id=method_cfg.id, status=classify_failure(exc), attempt=attempt, error=traceback.format_exc()
+                    )
+                append_jsonl(run_dir / method_results_path(method_cfg.id), record)
+                counts[record.status] += 1
+                shown = f"{record.timings_s.get('decode_tokens_per_s', 0):.1f} tok/s" if record.status == "ok" else record.status
+                print(f"[{i}/{len(todo)}] {ex.example_id} {method_cfg.id}: {shown}")
+                mx.clear_cache()
     except KeyboardInterrupt:
         append_jsonl(
             events, {"event": "run_interrupted", "time_utc": datetime.now(timezone.utc).isoformat(), "counts": counts}

@@ -1,0 +1,86 @@
+# LongBench v1 dev (English QA, official F1), natural-length buckets: uniform vs selective.
+schema_version: 1
+name: longbench_dev
+
+model:
+  backend: mlx
+  id: Qwen/Qwen3-4B
+  revision: 1cfa9a7208912126459214e8b04321603b3df60c
+  weight_dtype: bfloat16
+
+execution:
+  mode: quality_simulated
+  seed: 42
+
+protocol:
+  prefill_dtype: bfloat16
+  conversion_point: after_context_before_question
+  key_position: post_rope
+  protected_window:
+    tokens: 512
+    precision_bits: 8
+    overflow: demote_oldest
+
+benchmarks:
+  - name: longbench
+    split_manifest: data/manifests/longbench_qwen3-4b/longbench_dev.jsonl
+    tasks: [2wikimqa, multifieldqa_en, qasper]
+    context_lengths: [4096, 8192, 16384]
+
+methods:
+  - id: B0
+    kind: identity
+
+  - id: U4          # 4.5 bits
+    kind: uniform
+    key_bits: 4
+    value_bits: 4
+    group_size: 64
+    axis: per_token
+
+  - id: U3          # 3.5 bits
+    kind: uniform
+    key_bits: 3
+    value_bits: 3
+    group_size: 64
+    axis: per_token
+
+  - id: U2          # 2.5 bits
+    kind: uniform
+    key_bits: 2
+    value_bits: 2
+    group_size: 64
+    axis: per_token
+
+  # Selective 8/2 at <= 3.5 bits (U3 budget): 2.5 + f * (8.5 - 2.5) + f * 16 / 256, f = 0.164 -> 3.494
+  - id: Q82         # tokens with the largest relative 2-bit quantization error
+    kind: selective
+    selector: quantization_residual
+    high_bits: 8
+    low_bits: 2
+    high_fraction: 0.164
+    group_size: 64
+    axis: per_token
+
+  - id: R82         # random tokens: the control for Q82
+    kind: selective
+    selector: random
+    high_bits: 8
+    low_bits: 2
+    high_fraction: 0.164
+    group_size: 64
+    axis: per_token
+    seed: 0
+
+  - id: S82         # attention sinks + most recent context tokens
+    kind: selective
+    selector: sinks_recency
+    high_bits: 8
+    low_bits: 2
+    high_fraction: 0.164
+    group_size: 64
+    axis: per_token
+    sink_tokens: 4
+
+output:
+  root: results

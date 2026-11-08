@@ -181,3 +181,27 @@ def score_continuation(model: Any, cache: list[Any], continuation_ids: list[int]
         nll = mx.logsumexp(logits, axis=-1) - mx.take_along_axis(logits, targets[:, None], axis=-1)[:, 0]
         total += float(nll.sum())
     return total, len(continuation_ids) - 1
+
+
+def cache_buffer_bytes(cache: list[Any]) -> int:
+    """Bytes of every buffer the cache holds (allocation slack included); packed caches report their own."""
+    return sum(c.nbytes() if callable(getattr(c, "nbytes", None)) else c.keys.nbytes + c.values.nbytes for c in cache)
+
+
+def generate_fixed(model: Any, question_ids: list[int], cache: list[Any], n_tokens: int) -> tuple[list[int], float, float]:
+    """Greedy decode of exactly n_tokens (EOS ignored), for timing.
+
+    Returns (tokens, question_prefill_s, decode_s). The first token comes from the
+    question forward pass; computation is forced to finish before each timer stops.
+    """
+    import time
+
+    t0 = time.perf_counter()
+    token = model(mx.array(question_ids)[None], cache=cache)[:, -1].argmax(axis=-1)
+    out = [int(token.item())]
+    question_s = time.perf_counter() - t0
+    t0 = time.perf_counter()
+    for _ in range(n_tokens - 1):
+        token = model(token.reshape(1, 1), cache=cache)[:, -1].argmax(axis=-1)
+        out.append(int(token.item()))
+    return out, question_s, time.perf_counter() - t0

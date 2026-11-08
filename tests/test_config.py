@@ -30,7 +30,7 @@ def test_unknown_nested_field_rejected(config_dict):
 
 def test_systems_real_rejected_not_substituted(config_dict):
     config_dict["execution"]["mode"] = "systems_real"
-    with pytest.raises(ValidationError, match="milestone E"):
+    with pytest.raises(ValidationError, match="requires execution.systems"):
         ExperimentConfig.model_validate(config_dict)
 
 
@@ -157,4 +157,25 @@ def test_window_below_selective_high_bits_rejected(config_dict):
     config_dict["protocol"]["protected_window"] = {**WINDOW, "precision_bits": 4}
     config_dict["methods"].append({**SELECTIVE, "high_bits": 8, "low_bits": 2})
     with pytest.raises(ValidationError, match="below the method"):
+        ExperimentConfig.model_validate(config_dict)
+
+
+SYSTEMS = {"warmup_runs": 1, "repeats": 3, "decode_tokens": 64}
+
+
+def test_systems_real_accepted_with_settings(config_dict):
+    config_dict["execution"] = {"mode": "systems_real", "seed": 0, "systems": SYSTEMS}
+    assert ExperimentConfig.model_validate(config_dict).execution.systems.repeats == 3
+
+
+def test_systems_settings_rejected_in_simulated_mode(config_dict):
+    config_dict["execution"]["systems"] = SYSTEMS
+    with pytest.raises(ValidationError, match="applies only"):
+        ExperimentConfig.model_validate(config_dict)
+
+
+def test_systems_real_rejects_continuation_benchmarks(config_dict):
+    config_dict["execution"] = {"mode": "systems_real", "seed": 0, "systems": SYSTEMS}
+    config_dict["benchmarks"].append({"name": "pg19", "split_manifest": "p.jsonl", "context_lengths": [4096], "continuation_tokens": 512})
+    with pytest.raises(ValidationError, match="pg19"):
         ExperimentConfig.model_validate(config_dict)

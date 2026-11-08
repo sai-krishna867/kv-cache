@@ -62,6 +62,7 @@ class ResultRecord:
     cache_bytes_estimated: int | None = None  # at the conversion point (context only)
     cache_bytes_estimated_final: int | None = None  # after decode, protected window included
     cache_bytes_label: str | None = None
+    memory_bytes: dict[str, int] = field(default_factory=dict)  # systems_real: measured buffers and MLX memory
     timings_s: dict[str, float] = field(default_factory=dict)
     timings_label: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)

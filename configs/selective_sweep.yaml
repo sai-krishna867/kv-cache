@@ -1,0 +1,118 @@
+# Phase 2 on RULER dev: selective precision against uniform at matched memory.
+# Tasks are the ones with BF16 headroom (qa_1, qa_2, niah_multivalue) or with
+# uniform-quantization loss in the pilot (vt, niah_multiquery). Effective bits are
+# reported per record; selective fractions are set to stay at or below the
+# matching uniform budget.
+schema_version: 1
+name: selective_sweep
+
+model:
+  backend: mlx
+  id: Qwen/Qwen3-4B
+  revision: 1cfa9a7208912126459214e8b04321603b3df60c
+  weight_dtype: bfloat16
+
+execution:
+  mode: quality_simulated
+  seed: 42
+
+protocol:
+  prefill_dtype: bfloat16
+  conversion_point: after_context_before_question
+  key_position: post_rope
+  protected_window:
+    tokens: 512
+    precision_bits: 8
+    overflow: demote_oldest
+
+benchmarks:
+  - name: ruler
+    split_manifest: data/manifests/ruler_qwen3-4b_selective_s42/ruler_dev.jsonl
+    tasks: [vt, niah_multivalue, niah_multiquery, qa_1, qa_2]
+    context_lengths: [4096, 8192, 16384]
+    max_new_tokens: 128
+
+methods:
+  - id: B0          # bf16, 16 bits
+    kind: identity
+
+  - id: U4          # 4.5 bits
+    kind: uniform
+    key_bits: 4
+    value_bits: 4
+    group_size: 64
+    axis: per_token
+
+  - id: U3          # 3.5 bits
+    kind: uniform
+    key_bits: 3
+    value_bits: 3
+    group_size: 64
+    axis: per_token
+
+  - id: U2          # 2.5 bits
+    kind: uniform
+    key_bits: 2
+    value_bits: 2
+    group_size: 64
+    axis: per_token
+
+  - id: U2g32       # 3.0 bits
+    kind: uniform
+    key_bits: 2
+    value_bits: 2
+    group_size: 32
+    axis: per_token
+
+  # Selective 8/2 at <= 3.5 bits (U3 budget): 2.5 + f * (8.5 - 2.5) + f * 16 / 256, f = 0.164 -> 3.494
+  - id: Q82         # tokens with the largest relative 2-bit quantization error
+    kind: selective
+    selector: quantization_residual
+    high_bits: 8
+    low_bits: 2
+    high_fraction: 0.164
+    group_size: 64
+    axis: per_token
+
+  - id: R82         # random tokens: the control for Q82
+    kind: selective
+    selector: random
+    high_bits: 8
+    low_bits: 2
+    high_fraction: 0.164
+    group_size: 64
+    axis: per_token
+    seed: 0
+
+  - id: S82         # attention sinks + most recent context tokens
+    kind: selective
+    selector: sinks_recency
+    high_bits: 8
+    low_bits: 2
+    high_fraction: 0.164
+    group_size: 64
+    axis: per_token
+    sink_tokens: 4
+
+  # Selective 4/2 at <= 3.5 bits: 2.5 + f * 2 + f * 16 / 256, f = 0.484 -> 3.498
+  - id: Q42
+    kind: selective
+    selector: quantization_residual
+    high_bits: 4
+    low_bits: 2
+    high_fraction: 0.484
+    group_size: 64
+    axis: per_token
+
+  # Selective 8/2 at <= 3.0 bits (U2g32 budget): f = 0.082 -> 2.997
+  - id: Q82b3
+    kind: selective
+    selector: quantization_residual
+    high_bits: 8
+    low_bits: 2
+    high_fraction: 0.082
+    group_size: 64
+    axis: per_token
+
+output:
+  root: results

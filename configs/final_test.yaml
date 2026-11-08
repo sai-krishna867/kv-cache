@@ -1,0 +1,103 @@
+# FROZEN final evaluation on the held-out test splits. Methods were selected on
+# dev results only (selective_sweep, pg19_dev, longbench_dev): the uniform
+# comparators at 3.5 and 3.0 bits, the three 8/2 selectors at 3.494 bits, and
+# residual 8/2 at 2.997 bits. Do not edit after looking at test results.
+schema_version: 1
+name: final_test
+
+model:
+  backend: mlx
+  id: Qwen/Qwen3-4B
+  revision: 1cfa9a7208912126459214e8b04321603b3df60c
+  weight_dtype: bfloat16
+
+execution:
+  mode: quality_simulated
+  seed: 42
+
+protocol:
+  prefill_dtype: bfloat16
+  conversion_point: after_context_before_question
+  key_position: post_rope
+  protected_window:
+    tokens: 512
+    precision_bits: 8
+    overflow: demote_oldest
+
+benchmarks:
+  - name: ruler
+    split_manifest: data/manifests/ruler_qwen3-4b_selective_s42/ruler_test.jsonl
+    tasks: [vt, niah_multivalue, niah_multiquery, qa_1, qa_2]
+    context_lengths: [4096, 8192, 16384]
+    max_new_tokens: 128
+
+  - name: longbench
+    split_manifest: data/manifests/longbench_qwen3-4b/longbench_test.jsonl
+    tasks: [2wikimqa, multifieldqa_en, qasper]
+    context_lengths: [4096, 8192, 16384]
+
+  - name: pg19
+    split_manifest: data/manifests/pg19_qwen3-4b_s42/pg19_test.jsonl
+    context_lengths: [4096, 8192, 16384]
+    continuation_tokens: 512
+
+methods:
+  - id: B0          # bf16, 16 bits
+    kind: identity
+
+  - id: U3          # 3.5 bits
+    kind: uniform
+    key_bits: 3
+    value_bits: 3
+    group_size: 64
+    axis: per_token
+
+  - id: U2g32       # 3.0 bits
+    kind: uniform
+    key_bits: 2
+    value_bits: 2
+    group_size: 32
+    axis: per_token
+
+  # Selective 8/2 at <= 3.5 bits (U3 budget): 2.5 + f * (8.5 - 2.5) + f * 16 / 256, f = 0.164 -> 3.494
+  - id: Q82         # tokens with the largest relative 2-bit quantization error
+    kind: selective
+    selector: quantization_residual
+    high_bits: 8
+    low_bits: 2
+    high_fraction: 0.164
+    group_size: 64
+    axis: per_token
+
+  - id: R82         # random tokens: the control for Q82
+    kind: selective
+    selector: random
+    high_bits: 8
+    low_bits: 2
+    high_fraction: 0.164
+    group_size: 64
+    axis: per_token
+    seed: 0
+
+  - id: S82         # attention sinks + most recent context tokens
+    kind: selective
+    selector: sinks_recency
+    high_bits: 8
+    low_bits: 2
+    high_fraction: 0.164
+    group_size: 64
+    axis: per_token
+    sink_tokens: 4
+
+  # Selective 8/2 at <= 3.0 bits (U2g32 budget): f = 0.082 -> 2.997
+  - id: Q82b3
+    kind: selective
+    selector: quantization_residual
+    high_bits: 8
+    low_bits: 2
+    high_fraction: 0.082
+    group_size: 64
+    axis: per_token
+
+output:
+  root: results

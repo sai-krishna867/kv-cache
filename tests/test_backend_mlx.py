@@ -100,3 +100,17 @@ def test_identity_rejects_non_bf16_cache(model):
 def test_read_arch_uses_explicit_head_dim():
     cfg = {"num_attention_heads": 32, "num_hidden_layers": 36, "num_key_value_heads": 8, "head_dim": 128, "hidden_size": 2560}
     assert backend.read_arch(cfg) == backend.Arch(36, 8, 128)
+
+
+def test_score_continuation_matches_single_pass_nll(model):
+    rng = np.random.default_rng(11)
+    ctx, cont = rng.integers(0, 97, 300).tolist(), rng.integers(0, 97, 40).tolist()
+    branch = backend.branch_cache(backend.prefill(model, ctx))
+    nll, n = backend.score_continuation(model, branch, cont, step=16)
+
+    logits = model(mx.array(ctx + cont)[None])[0].astype(mx.float32)
+    logp = logits - mx.logsumexp(logits, axis=-1, keepdims=True)
+    # position len(ctx) + i predicts cont[i + 1]; cont[0] (predicted from the context) is excluded
+    expected = -sum(float(logp[len(ctx) + i, cont[i + 1]]) for i in range(len(cont) - 1))
+    assert n == len(cont) - 1
+    assert nll == pytest.approx(expected, rel=1e-4)

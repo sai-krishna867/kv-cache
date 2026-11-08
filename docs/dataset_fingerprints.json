@@ -156,6 +156,40 @@
       "splits": [
         "test"
       ]
+    },
+    {
+      "path": "data/manifests/ruler_qwen3-4b_selective_s42/ruler_dev.jsonl",
+      "sha256": "10f1999e325e15d6afcfb20db79c52a15937e319ba4285637c2a602be2c681ac",
+      "bytes": 5596724,
+      "examples": 149,
+      "bundled": false,
+      "tasks": [
+        "niah_multiquery",
+        "niah_multivalue",
+        "qa_1",
+        "qa_2",
+        "vt"
+      ],
+      "splits": [
+        "dev"
+      ]
+    },
+    {
+      "path": "data/manifests/ruler_qwen3-4b_selective_s42/ruler_test.jsonl",
+      "sha256": "d3affc9545a29e67d899c7e6376e9173115e2ab54b96093a34101eb83a4c786e",
+      "bytes": 24625753,
+      "examples": 601,
+      "bundled": false,
+      "tasks": [
+        "niah_multiquery",
+        "niah_multivalue",
+        "qa_1",
+        "qa_2",
+        "vt"
+      ],
+      "splits": [
+        "test"
+      ]
     }
   ]
 }

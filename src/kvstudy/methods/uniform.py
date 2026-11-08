@@ -130,3 +130,24 @@ class UniformMethod:
         low = bytes_per_token(arch, self.cfg.key_bits, self.cfg.value_bits, g)
         win = bytes_per_token(arch, self.window.precision_bits, self.window.precision_bits, g)
         return c.window_start * low + c.n_window * win
+
+    def convert_real(self, cache: list[Any], arch: Arch) -> list[Any]:
+        """systems_real: pack the context at the method's bits; the BF16 arrays are released."""
+        from kvstudy.methods.packed import PackedCache, Segment, install, quantize
+
+        install()
+        cfg, packed = self.cfg, []
+        for c in cache:
+            k, v = c.keys[..., : c.offset, :], c.values[..., : c.offset, :]
+            seg = Segment(
+                cfg.key_bits,
+                cfg.value_bits,
+                quantize(k, cfg.key_bits, cfg.group_size),
+                quantize(v, cfg.value_bits, cfg.group_size),
+                n_context=c.offset,
+            )
+            packed.append(
+                PackedCache([seg], 0, cfg.group_size, self.window.tokens, self.window.precision_bits, c.offset)
+            )
+        mx.eval([c.state for c in packed])
+        return packed

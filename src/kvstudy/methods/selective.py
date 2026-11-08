@@ -104,3 +104,30 @@ class SelectiveMethod:
         low = bytes_per_token(arch, self.cfg.low_bits, self.cfg.low_bits, g)
         win = bytes_per_token(arch, self.window.precision_bits, self.window.precision_bits, g)
         return sum(x.context_bytes for x in cache) + (c.window_start - c.n_context) * low + c.n_window * win
+
+    def convert_real(self, cache: list[Any], arch: Arch) -> list[Any]:
+        """systems_real: gather each head's high and low tokens into separately packed segments."""
+        from kvstudy.methods.packed import PackedCache, Segment, install, quantize
+
+        install()
+        cfg, packed = self.cfg, []
+        view = CacheView(
+            keys=[c.keys[..., : c.offset, :] for c in cache], values=[c.values[..., : c.offset, :] for c in cache]
+        )
+        masks = select_tokens(view, cfg)
+        n = view.n_tokens
+        dtype = mx.uint16 if index_bytes(n) == 2 else mx.uint32
+        for k, v, mask in zip(view.keys, view.values, masks):
+            order = np.argsort(~mask, axis=-1, kind="stable")  # each head: high positions, then low, ascending
+            n_high = int(mask[0].sum())
+            idx = mx.array(order.astype(np.int32))[None, :, :, None]
+            segs = []
+            for part, bits in ((idx[:, :, :n_high], cfg.high_bits), (idx[:, :, n_high:], cfg.low_bits)):
+                pk, pv = mx.take_along_axis(k, part, axis=2), mx.take_along_axis(v, part, axis=2)
+                segs.append(Segment(bits, bits, quantize(pk, bits, cfg.group_size), quantize(pv, bits, cfg.group_size), n_context=part.shape[2]))
+            index = idx[:, :, :n_high, 0].astype(dtype)
+            packed.append(
+                PackedCache(segs, 1, cfg.group_size, self.window.tokens, self.window.precision_bits, n, index=index)
+            )
+        mx.eval([c.state for c in packed])
+        return packed

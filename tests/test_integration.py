@@ -86,3 +86,25 @@ def test_vendored_postprocess_matches_upstream_source():
     node = next(n for n in ast.parse(source).body if isinstance(n, ast.FunctionDef) and n.name == "postprocess_pred")
     upstream_src = ast.get_source_segment(source, node)
     assert textwrap.dedent(inspect.getsource(ruler_eval.postprocess_pred)).strip() == upstream_src.strip()
+
+
+@pytest.mark.parametrize(
+    "relpath,names",
+    [
+        ("LongBench/metrics.py", ["normalize_answer", "f1_score", "qa_f1_score"]),
+        ("LongBench/eval.py", ["scorer"]),
+    ],
+)
+def test_vendored_longbench_matches_upstream_source(relpath, names):
+    from kvstudy.benchmarks._vendor import longbench_eval
+
+    path = REPO / "data" / "upstream" / "LongBench" / relpath
+    if not path.exists():
+        pytest.skip(f"{path} not present")
+    source = path.read_text()
+    upstream = {n.name: ast.get_source_segment(source, n) for n in ast.parse(source).body if isinstance(n, ast.FunctionDef)}
+    for name in names:
+        assert inspect.getsource(getattr(longbench_eval, name)).strip() == upstream[name].strip()
+    eval_src = (REPO / "data" / "upstream" / "LongBench" / "LongBench" / "eval.py").read_text()
+    for task in longbench_eval.dataset2metric:
+        assert f'"{task}": qa_f1_score' in eval_src  # same metric upstream

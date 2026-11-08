@@ -1,0 +1,16 @@
+# Declared comparisons on the RULER selective sweep (dev). Each selective method
+# is compared with the uniform method at the next-higher budget it does not
+# exceed, and with random selection at the same budget. The listed pairs form one
+# Holm family per benchmark.
+schema_version: 1
+name: selective_vs_uniform
+run_dir: results/selective_sweep/2026-11-08T074130Z_906a5c29
+comparisons:
+  - {method: Q82, against: U3}      # residual 8/2 (3.494 bits) vs uniform 3-bit (3.5)
+  - {method: R82, against: U3}      # random 8/2 vs uniform 3-bit
+  - {method: S82, against: U3}      # sinks+recency 8/2 vs uniform 3-bit
+  - {method: Q42, against: U3}      # residual 4/2 (3.498) vs uniform 3-bit
+  - {method: Q82, against: R82}     # does residual selection beat random at equal bytes?
+  - {method: S82, against: R82}
+  - {method: Q82b3, against: U2g32} # residual 8/2 (2.997) vs uniform 2-bit g32 (3.0)
+holm: true

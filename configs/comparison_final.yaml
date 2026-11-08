@@ -1,0 +1,14 @@
+# Declared final comparisons for configs/final_test.yaml, fixed before any test
+# result exists. Set run_dir to the directory `kvstudy run configs/final_test.yaml`
+# prints, then run `kvstudy compare configs/comparison_final.yaml`. One Holm
+# family per benchmark.
+schema_version: 1
+name: final
+run_dir: results/final_test/SET_AFTER_RUN
+comparisons:
+  - {method: Q82b3, against: U2g32}  # 3.0 bits: residual 8/2 vs uniform 2-bit g32 (dev: RULER +10.9)
+  - {method: S82, against: U3}       # 3.5 bits: sinks+recency vs uniform 3-bit (dev: PG-19 better)
+  - {method: Q82, against: U3}       # 3.5 bits: residual vs uniform 3-bit (dev: RULER/LongBench worse)
+  - {method: Q82, against: R82}      # selection vs random at equal bytes
+  - {method: S82, against: R82}
+holm: true

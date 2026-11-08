@@ -85,6 +85,35 @@ def cmd_analyze(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_plot(args: argparse.Namespace) -> int:
+    from kvstudy.analysis.plots import plot_run
+
+    for path in plot_run(args.run_dir):
+        print(f"wrote {path}")
+    return 0
+
+
+def cmd_compare(args: argparse.Namespace) -> int:
+    from kvstudy.analysis.compare import compare_declared
+    from kvstudy.config import load_comparison_config
+
+    try:
+        cfg = load_comparison_config(args.config)
+    except ValidationError as e:
+        sys.exit(f"invalid comparison config {args.config}:\n{e}")
+    out = compare_declared(cfg)
+    for c in out["comparisons"]:
+        for row in c["pooled"]:
+            ci = row["mean_diff_ci"]
+            interval = "" if ci is None else f" [{ci[0]:+.3f}, {ci[1]:+.3f}]"
+            diff = "n/a" if row["mean_diff"] is None else f"{row['mean_diff']:+.3f}"
+            holm_p = f" p_holm={row['p_value_holm']:.4f}" if row.get("p_value_holm") is not None else ""
+            p = "n/a" if row["p_value_bootstrap"] is None else f"{row['p_value_bootstrap']:.4f}"
+            print(f"{c['method']} vs {c['against']} {row['benchmark']}: diff={diff}{interval} p={p}{holm_p} pairs={row['n_pairs']}")
+    print(f"wrote {Path(cfg.run_dir) / 'comparisons' / (cfg.name + '.json')}")
+    return 0
+
+
 def cmd_prepare_ruler(args: argparse.Namespace) -> int:
     from kvstudy.backends.mlx import local_snapshot
     from kvstudy.benchmarks.ruler import prepare_ruler
@@ -189,6 +218,14 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("analyze", help="summarize saved results of a run")
     p.add_argument("run_dir", type=Path)
     p.set_defaults(func=cmd_analyze)
+
+    p = sub.add_parser("plot", help="quality-memory and systems figures from a run's saved summaries")
+    p.add_argument("run_dir", type=Path)
+    p.set_defaults(func=cmd_plot)
+
+    p = sub.add_parser("compare", help="declared paired comparisons on a saved run")
+    p.add_argument("config", type=Path)
+    p.set_defaults(func=cmd_compare)
 
     p = sub.add_parser("prepare", help="generate versioned dataset split manifests")
     prep = p.add_subparsers(dest="dataset", required=True)

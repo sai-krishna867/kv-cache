@@ -33,18 +33,34 @@ class ModelConfig(Strict):
     weight_dtype: Literal["bfloat16"]
 
 
+class SystemsConfig(Strict):
+    """systems_real measurement settings: every (example, method) is run warmup_runs
+    + repeats times from a fresh prefill, decoding exactly decode_tokens tokens."""
+
+    warmup_runs: int = Field(ge=0)
+    repeats: int = Field(ge=1)
+    decode_tokens: int = Field(gt=0)
+
+
 class ExecutionConfig(Strict):
     mode: str
     seed: int
+    systems: SystemsConfig | None = None
 
     @field_validator("mode")
     @classmethod
     def _mode(cls, v: str) -> str:
-        if v == "systems_real":
-            raise ValueError("execution.mode 'systems_real' is not implemented until milestone E")
-        if v != "quality_simulated":
-            raise ValueError(f"unknown execution.mode {v!r}; supported: 'quality_simulated'")
+        if v not in ("quality_simulated", "systems_real"):
+            raise ValueError(f"unknown execution.mode {v!r}; supported: 'quality_simulated', 'systems_real'")
         return v
+
+    @model_validator(mode="after")
+    def _systems(self) -> ExecutionConfig:
+        if self.mode == "systems_real" and self.systems is None:
+            raise ValueError("execution.mode 'systems_real' requires execution.systems (warmup_runs, repeats, decode_tokens)")
+        if self.mode != "systems_real" and self.systems is not None:
+            raise ValueError("execution.systems applies only to execution.mode 'systems_real'")
+        return self
 
 
 class ProtectedWindowConfig(Strict):
@@ -199,6 +215,14 @@ class ExperimentConfig(Strict):
         return self
 
     @model_validator(mode="after")
+    def _systems_benchmarks(self) -> ExperimentConfig:
+        if self.execution.mode == "systems_real":
+            continuation = [b.name for b in self.benchmarks if b.name == "pg19"]
+            if continuation:
+                raise ValueError("systems_real times generation; continuation benchmarks (pg19) are not supported")
+        return self
+
+    @model_validator(mode="after")
     def _protected_window(self) -> ExperimentConfig:
         compressed = [m for m in self.methods if m.kind != "identity"]
         window = self.protocol.protected_window
@@ -212,6 +236,30 @@ class ExperimentConfig(Strict):
                     f"is below the method's own precision"
                 )
         return self
+
+
+class ComparisonPair(Strict):
+    method: str = Field(pattern=SAFE_ID)
+    against: str = Field(pattern=SAFE_ID)
+
+
+class ComparisonConfig(Strict):
+    """Declared comparisons on one saved run (`kvstudy compare`).
+
+    Methods are named explicitly; nothing is chosen from results. With `holm`,
+    the listed comparisons form one family, corrected per benchmark at pooled scope.
+    """
+
+    schema_version: Literal[1]
+    name: str = Field(pattern=SAFE_ID)
+    run_dir: Path
+    comparisons: list[ComparisonPair] = Field(min_length=1)
+    holm: bool
+
+
+def load_comparison_config(path: Path) -> ComparisonConfig:
+    with open(path, encoding="utf-8") as f:
+        return ComparisonConfig.model_validate(yaml.safe_load(f))
 
 
 def load_config(path: Path) -> ExperimentConfig:

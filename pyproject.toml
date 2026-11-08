@@ -21,6 +21,7 @@ kvstudy = "kvstudy.cli:main"
 dev = ["pytest"]
 # Dependencies of the upstream RULER data generator (data/upstream/RULER/scripts/data).
 prepare = ["wonderwords", "nltk", "tqdm", "transformers", "tenacity"]
+plots = ["matplotlib>=3.8"]
 
 [build-system]
 requires = ["hatchling"]

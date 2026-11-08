@@ -1,4 +1,4 @@
-# Methodology (as implemented through milestone B, plus pilot preparation)
+# Methodology (as implemented)
 
 Background: `KV Cache Precision — Experiment Design.docx`. This file records what the code actually does.
 
@@ -21,6 +21,8 @@ Every example follows one procedure (`src/kvstudy/runner.py`):
    5. Score, save the record, and release the branch.
 
 Because the question is read after conversion, retrieval must go through the converted context. MLX-LM stores keys after RoPE, so `key_position: post_rope` holds by construction.
+
+Continuation benchmarks (PG-19) follow the same procedure with the reference continuation in place of the question: the context token ids are prefilled, and the continuation is teacher-forced through each converted branch (see PG-19 below).
 
 A future protocol that quantizes during prefill is a different protocol and will get a different `protocol_id`.
 
@@ -52,6 +54,8 @@ Prefilling `ids[:b]` and then `ids[b:]` reproduces the single-pass tokenization 
   - a `source_id` would appear in two splits.
 
   The same checks run within the new set. Example IDs are `ruler/<task>/<length>/<index>`, so a new manifest generated with the same seed and more samples reproduces the earlier examples under the same IDs and splits. The check confirms this rather than assuming it.
+- **QA tasks.** `qa_1` (SQuAD) and `qa_2` (HotpotQA) ask question `index` at every length (upstream `qa.py`), so their `source_id` is the question (`ruler/<task>/q<index>`) and all lengths of one question share a split. Their answers are not always extractive (e.g. yes/no), so the reference-in-context check applies only to synthetic tasks. Questions about the same SQuAD paragraph remain separate sources. The QA source files are downloaded by upstream's `download_qa_dataset.sh` URLs (HotpotQA from its Hugging Face fallback).
+- **Unavailable task.** `cwe` needs `english_words.json`, which the RULER clone holds as a Git LFS pointer; the LFS host was unreachable from this machine, so `cwe` was not prepared. `fwe` needs scipy, which is not a dependency.
 - **Essay haystack.** `niah_multikey_1`, `niah_multivalue` and `niah_multiquery` use RULER's Paul Graham essay haystack. Upstream downloads it from the web rather than pinning it, so each such example records the file's sha256 as `metadata.haystack_sha256`. Within one length, every essay example uses the same essay prefix with different needles. The haystack is a shared distractor, not a per-example source.
 - **Scoring.** Scoring uses `postprocess_pred`, `string_match_all`, and `string_match_part`, copied verbatim from upstream, and maps task family to metric exactly as upstream `TASKS` does. Scores are computed per example on a 0–100 scale. Upstream rounds each call to 2 decimals, so a mean of per-example scores can differ from upstream's whole-set call by at most 0.005. `tests/test_integration.py` checks parity against the clone.
 
@@ -81,6 +85,21 @@ This policy is shared by every compressed method:
 
 With RULER inputs (≈40–65 question tokens, ≤128 generated) the 512-token window never overflows.
 
+### `selective` (simulated)
+
+Per layer and KV head, a fraction of context tokens is held at `high_bits` and the rest at `low_bits` (`methods/selective.py`). The selection is shared by a token's K and V. Every selector picks exactly `round(high_fraction × context tokens)` tokens per layer and head, so `high_fraction_realized` is recorded alongside the configured value and heads need no padding.
+
+Selectors (`methods/selectors.py`, `select_tokens(cache_view, config) -> masks`), registered in `SELECTORS`:
+- `random`: uniform random tokens, independent per layer and head, from `numpy.random.default_rng([seed, layer])`.
+- `sinks_recency`: the first `sink_tokens` context tokens plus the most recent ones, identical for every head.
+- `quantization_residual`: the tokens that low-bit quantization distorts most. Per layer and head,
+
+  `score_t = ‖K_t − Q(K_t)‖² / mean_s ‖K_s‖² + ‖V_t − Q(V_t)‖² / mean_s ‖V_s‖²`
+
+  where `Q` is affine quantization at `low_bits` and the group size, and the means run over that head's context tokens. Normalising each term by its head's mean squared norm keeps K and V on a comparable scale. The top tokens by score are kept at `high_bits`; ties go to the earlier position.
+
+Groups run along the head dimension, so each token is quantized independently and mixing precisions per token is exact for the format. The same protected window applies, with demotion to `low_bits`.
+
 ## Memory accounting
 
 Affine quantization needs, per token, layer and KV head:
@@ -93,7 +112,11 @@ So the effective bits per element are `b + 32/g`, as in the experiment design. T
 - `cache_bytes_estimated_final`: bytes after decode, counting protected-window tokens at window precision and demoted tokens at the method's precision.
 - For `identity`, both are the analytic BF16 value, asserted equal to the cache's actual `nbytes`. For `uniform`, they are labelled `analytic_affine_simulated`: estimates, not measurements.
 
-Position indices are not needed for uniform methods. They enter the accounting with selective precision (milestone D).
+For `selective`, per layer and KV head: `n_high` tokens at high precision (payload + scales/biases), the rest at low precision, plus one position index per high-precision token. Indices are uint16 while positions fit (≤ 65,536 context tokens), else uint32; K and V share one index. Every head holds the same number of high tokens, so there is no padding. The effective bits are
+
+`b_low + 32/g + f × (b_high − b_low) + f × 8 × index_bytes / (2 × head_dim)`
+
+and each record carries `metadata.effective_bits_context` and `high_fraction_realized`. Uniform methods need no indices. Configured fractions in `configs/selective_sweep.yaml` are chosen so selective methods sit at or below the matching uniform budget (3.494 vs 3.5 bits; 2.997 vs 3.0); the reported effective bits show the exact values, and different byte counts are never called equal.
 
 ### Format verification
 
@@ -102,10 +125,51 @@ After conversion, layer 0's K and V are checked on a sample of up to 64 tokens a
 - the per-group error must be at most two nominal quantization steps. MLX shifts the grid so zero is exact, and BF16 output rounding adds error at 8 bits, so the error can exceed half a step;
 - when `2^bits < group_size`, a group may hold at most `2^bits` distinct values.
 
+For `selective`, head 0 of layer 0 is checked twice: its selected tokens against `high_bits` and the rest against `low_bits`.
+
 A conversion that was skipped, or done at the wrong bit width, fails the run.
+
+## LongBench v1
+
+- **Data.** `THUDM/LongBench` `data.zip` at dataset revision `5e628be4…`, prompts and generation budgets from `LongBench/config/dataset2prompt.json` and `dataset2maxlen.json` at code commit `2e00731f…` (cloned at `data/upstream/LongBench`).
+- **Tasks.** The six English QA datasets scored by `qa_f1_score`: narrativeqa, qasper, multifieldqa_en, hotpotqa, 2wikimqa, musique. Other datasets need metrics (rouge, jieba, fuzzywuzzy) that are not vendored, and are rejected by the config.
+- **Context/question split.** The official prompt is split at `{context}`: the context part is the prompt text before it plus the document; the question part is the rest of the template with `{input}` filled in. Their concatenation is exactly `template.format(context=..., input=...)`. The chat template and fixed system prompt are applied by kvstudy, as LongBench's `build_chat` does for chat models; no answer prefix is added (the prompt already ends with "Answer:").
+- **Length policy.** No truncation and no padding. Each example's rendered length (chat template, system prompt, full prompt) plus its official generation budget decides its bucket: the smallest of the configured lengths (4096/8192/16384) that holds it. Longer examples are excluded and counted at preparation (373 of the six datasets). Natural buckets leave some task × length cells empty; configs request only populated cells.
+- **Sources.** Questions about one document share it, so `source_id` is a hash of the document; all its questions share a split.
+- **Scoring.** `normalize_answer`, `f1_score`, `qa_f1_score` and `scorer` vendored verbatim (MIT). Per example: the max F1 over references × 100; the mean equals upstream `scorer` up to its 2-decimal rounding. Generation budget per dataset from `dataset2maxlen`.
+
+## PG-19
+
+- **Data.** The test split from DeepMind's public bucket (`gs://deepmind-gutenberg/test`), each file's md5 verified against the bucket listing. One window per book and length, from all 100 test books; books shorter than the window are skipped and counted.
+- **Windows.** The book is tokenized once (no special tokens); for each length L a start is drawn from `default_rng([seed, book_id, L])` uniformly over valid starts. Context = L tokens, continuation = the next 512. Token ids are stored in the manifest, so every run scores identical tokens.
+- **Sources.** The book is the source; all of a book's windows share a split, and the bootstrap resamples books.
+- **First continuation token.** Its prediction comes from the last context position, whose logits are computed during the BF16 prefill, before conversion. It is excluded for every method: tokens 1..511 are scored, each predicted through the converted cache. Continuation tokens enter the protected window like question tokens (511 ≤ 512, so the window does not overflow).
+- **Metric.** Each record stores `nll_sum` (nats, float32 log-softmax) and `n_scored_tokens`; `score` is the mean NLL per token (lower is better). Perplexity is aggregated as `exp(Σ nll / Σ tokens)`, never as a mean of per-example perplexities.
 
 ## Memory and timing in `quality_simulated` mode
 - Timings (`prefill_context`, `branch_and_convert`, `question_and_decode`) are wall-clock values with no warm-up or repeats. They carry `timings_label`, which says they are not systems measurements.
+
+## Real packed storage (`execution.mode: systems_real`)
+
+`methods/packed.py` holds the cache as `mx.quantize` payloads, scales and biases; values are never dequantized in the cache. A layer is a list of segments with their own key/value bits: uniform `[context, window]`, selective `[high, low, window]`. Selective storage also keeps the uint16 position index per high token and head, counted in memory (attention does not read it, because keys are stored after RoPE).
+
+Attention runs over the segments with `mx.quantized_matmul` and one softmax across all of them. Context tokens are visible to every query; appended tokens are masked causally by absolute position. mlx-lm sends any cache with a `bits` attribute to `models.base.quantized_scaled_dot_product_attention`; `packed.install()` wraps that function to handle these segments and delegates everything else unchanged.
+
+Appended tokens enter the window segment at `precision_bits`; on overflow the oldest are dequantized and requantized at the method's low bits into the low segment, exactly as the simulation demotes them.
+
+Procedure per (example, method), repeated `warmup_runs + repeats` times:
+1. fresh BF16 prefill of the context (no reference cache is retained, so memory reflects deployment);
+2. real conversion (`convert_real`), with the BF16 arrays released;
+3. the question forward pass, then greedy decoding of exactly `decode_tokens` tokens, EOS ignored, so speed comparisons use equal lengths.
+
+Computation is forced to finish (`mx.eval` / `.item()`) before every timer stops. Records carry the medians over repeats (`prefill_context`, `convert`, `question_prefill`, `decode`, `decode_tokens_per_s`), every repeat in metadata, measured cache buffer bytes before conversion, after conversion and after decode, MLX active memory after conversion, and MLX peak memory. Scores are not computed for these fixed-length outputs. Continuation benchmarks are rejected in this mode.
+
+**Validation against the simulation** (`tests/test_packed_mlx.py`, tiny BF16 model), for uniform symmetric and asymmetric bits and selective with two selectors, with and without window overflow:
+- measured packed bytes equal the analytic estimate exactly, at conversion and after decoding;
+- logits after the question agree to within 5% of their range, with the same prediction wherever the top-1 margin exceeds the numerical difference;
+- greedy decoding produces identical tokens.
+
+The difference that remains is numerical: the real path multiplies against packed values inside `quantized_matmul`, the simulation against dequantized BF16 values.
 
 ## Failures
 
@@ -144,20 +208,33 @@ For each other method and scope, it reports:
 - `mean_diff` (method − reference) with `mean_diff_ci`;
 - `flip_rate` (prediction text differs) with `flip_rate_ci`.
 
-Pairs are matched on `example_id`.
+Additional scopes: `by_task` (all lengths of a task) and `by_length` (all tasks at a length), also example-weighted.
+
+Pairs are matched on `example_id`. Unscored records (systems_real) are excluded from pairing.
 
 Intervals are 95% percentile intervals from a paired cluster bootstrap: 10,000 resamples with fixed seed 0, recorded under `paired_vs_reference.bootstrap`.
 - Each resample draws whole `source_id`s with replacement, and keeps every pair of a drawn source. Examples from one document are never split apart.
 - For RULER each example is its own source, so this reduces to a per-example bootstrap.
 - With fewer than two sources the interval is `null`.
 
-McNemar tests and Holm correction come later.
+Each scope also reports:
+- `p_value_bootstrap`: two-sided, twice the smaller bootstrap tail mass at zero, from the same cluster resamples;
+- `mcnemar`: an exact McNemar test, only when every score on both sides is 0 or 100 (genuinely binary outcomes, e.g. single-needle NIAH); otherwise `null`;
+- for PG-19: `perplexity`, `perplexity_reference` and `perplexity_ratio`. Flip rate is `null` without generated text.
 
-## Not yet implemented (later milestones)
+Per-method summaries add `mean_effective_bits` (estimated context bytes × 8 / (context tokens × layers × KV heads × head_dim × 2)) and the metric name, and for systems_real the median timings and measured memory.
 
-- Selective precision and selectors.
-- Per-channel key quantization.
-- LongBench and PG-19.
-- McNemar and Holm statistics.
-- Plots.
-- `systems_real` mode with packed storage and real memory/timing.
+### Declared comparisons (`kvstudy compare <comparison.yaml>`)
+
+A comparison config names a run and explicit `{method, against}` pairs, e.g. selective vs its matched uniform comparator or vs random selection. Nothing is chosen from results. With `holm: true` the listed comparisons form one family and pooled p-values are Holm-adjusted per benchmark. Output: `comparisons/<name>.json`.
+
+### Figures (`kvstudy plot <run_dir>`)
+
+One quality–memory figure per benchmark (paired difference vs BF16 with its 95% CI, against effective bits); metrics are never combined. For systems_real runs, decode speed and measured cache size per context length.
+
+## Not implemented
+
+- Per-channel (KIVI-style) key quantization and attention-based selection (the plan places them after the first selectors).
+- LongBench datasets outside the English QA family; RULER `cwe` and `fwe` (see RULER above).
+- Timing of continuation scoring in `systems_real`.
+- A protocol that quantizes during prefill (it would carry a different `protocol_id`).

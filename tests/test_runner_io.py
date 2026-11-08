@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from kvstudy.analysis.compare import summarize_run
 from kvstudy.config import ExperimentConfig
@@ -215,3 +216,99 @@ def test_bootstrap_interval_needs_two_sources(tmp_path):
     append_jsonl(tmp_path / method_results_path("u4"), _pred("u4", "e1", "ok", 0.0, "b"))
     [cell] = summarize_run(tmp_path)["paired_vs_reference"]["methods"]["u4"]["cells"]
     assert cell["n_sources"] == 1 and cell["mean_diff_ci"] is None
+
+
+def test_holm_adjustment():
+    from kvstudy.analysis.compare import holm
+
+    assert holm([0.01, 0.04, None, 0.03]) == [0.03, 0.06, None, 0.06]
+    assert holm([0.5, 0.9]) == [1.0, 1.0]
+
+
+def test_mcnemar_only_for_binary_scores():
+    from kvstudy.analysis.compare import mcnemar_exact
+
+    pair = lambda m, r: ({"score": m}, {"score": r})
+    result = mcnemar_exact([pair(0.0, 100.0)] * 6 + [pair(100.0, 100.0)] * 4)
+    assert (result["method_only_correct"], result["reference_only_correct"]) == (0, 6)
+    assert result["p_value"] == 2 / 2**6
+    assert mcnemar_exact([pair(50.0, 100.0)]) is None
+
+
+def test_bootstrap_p_value_extremes():
+    from kvstudy.analysis.compare import bootstrap_p_value
+
+    assert bootstrap_p_value([0.0] * 10, [str(i) for i in range(10)]) == 1.0
+    assert bootstrap_p_value([-1.0] * 10, [str(i) for i in range(10)]) == 0.0
+
+
+def test_paired_scopes_by_task_and_length(tmp_path):
+    _write_run(tmp_path, ["bf16", "u4"])
+    ref, meth = tmp_path / method_results_path("bf16"), tmp_path / method_results_path("u4")
+    for i, (task, length, delta) in enumerate([("niah", 4096, 0.0), ("niah", 8192, -100.0), ("vt", 4096, -50.0)]):
+        r, m = _pred("bf16", f"e{i}", "ok", 100.0, "a", length), _pred("u4", f"e{i}", "ok", 100.0 + delta, "b", length)
+        r.task = m.task = task
+        append_jsonl(ref, r)
+        append_jsonl(meth, m)
+    result = summarize_run(tmp_path)["paired_vs_reference"]["methods"]["u4"]
+    by_task = {c["task"]: c for c in result["by_task"]}
+    by_length = {c["context_length"]: c for c in result["by_length"]}
+    assert by_task["niah"]["mean_diff"] == -50.0 and by_task["niah"]["n_pairs"] == 2
+    assert by_length[4096]["mean_diff"] == -25.0 and by_length[4096]["scope"] == "length"
+    assert result["pooled"][0]["mean_diff"] == -50.0
+
+
+def test_continuation_records_report_perplexity(tmp_path):
+    import math
+
+    _write_run(tmp_path, ["bf16", "u4"])
+    for method, nll in (("bf16", 2.0), ("u4", 2.5)):
+        for i in range(2):
+            r = _rec(method, f"b{i}", "ok", nll)
+            r.benchmark, r.task, r.nll_sum, r.n_scored_tokens = "pg19", "continuation", nll * 511, 511
+            append_jsonl(tmp_path / method_results_path(method), r)
+    comparison = summarize_run(tmp_path)
+    [cell] = comparison["methods"]["u4"]
+    assert cell["perplexity"] == pytest.approx(math.exp(2.5)) and "NLL" in cell["metric"]
+    [pooled] = comparison["paired_vs_reference"]["methods"]["u4"]["pooled"]
+    assert pooled["mean_diff"] == pytest.approx(0.5)
+    assert pooled["perplexity_ratio"] == pytest.approx(math.exp(0.5))
+    assert pooled["flip_rate"] is None  # no generated text to compare
+
+
+def test_compare_declared_writes_named_comparisons_with_holm(tmp_path):
+    from kvstudy.analysis.compare import compare_declared
+    from kvstudy.config import ComparisonConfig
+
+    _write_run(tmp_path, ["bf16", "u4", "u2"])
+    for i in range(6):
+        append_jsonl(tmp_path / method_results_path("bf16"), _pred("bf16", f"e{i}", "ok", 100.0, "a"))
+        append_jsonl(tmp_path / method_results_path("u4"), _pred("u4", f"e{i}", "ok", 100.0, "a"))
+        append_jsonl(tmp_path / method_results_path("u2"), _pred("u2", f"e{i}", "ok", 0.0 if i < 4 else 100.0, "b"))
+    cfg = ComparisonConfig(
+        schema_version=1, name="final", run_dir=tmp_path, holm=True,
+        comparisons=[{"method": "u4", "against": "bf16"}, {"method": "u2", "against": "u4"}],
+    )  # fmt: skip
+    out = compare_declared(cfg)
+    assert (tmp_path / "comparisons" / "final.json").exists()
+    rows = [c["pooled"][0] for c in out["comparisons"]]
+    assert rows[0]["p_value_holm"] == 1.0
+    assert rows[1]["p_value_holm"] >= rows[1]["p_value_bootstrap"]
+    with pytest.raises(ValueError, match="not in run"):
+        compare_declared(cfg.model_copy(update={"comparisons": [cfg.comparisons[0].model_copy(update={"method": "zz"})]}))
+
+
+def test_plots_written_per_benchmark(tmp_path):
+    pytest.importorskip("matplotlib")
+    from kvstudy.analysis.plots import plot_run
+
+    _write_run(tmp_path, ["bf16", "u4"])
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    manifest["model"] = {"arch": {"num_layers": 1, "num_kv_heads": 1, "head_dim": 1}}
+    (tmp_path / "manifest.json").write_text(json.dumps(manifest))
+    for i in range(3):
+        append_jsonl(tmp_path / method_results_path("bf16"), _pred("bf16", f"e{i}", "ok", 100.0, "a"))
+        append_jsonl(tmp_path / method_results_path("u4"), _pred("u4", f"e{i}", "ok", 50.0 * i, "b"))
+    summarize_run(tmp_path)
+    [path] = plot_run(tmp_path)
+    assert path.name == "ruler_quality_memory.png" and path.stat().st_size > 0
