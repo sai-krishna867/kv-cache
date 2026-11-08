@@ -1,5 +1,8 @@
 results/
-data/
+data/*
+!data/manifests/
+data/manifests/*
+!data/manifests/ruler_qwen3-4b_s42/
 .venv/
 __pycache__/
 *.pyc

@@ -18,36 +18,46 @@ Background and protocol: `docs/methodology.md`.
 - [uv](https://docs.astral.sh/uv/)
 - About 8 GB of disk for the model
 
-## Reproduce the smoke experiment
+## Reproduce the smoke experiment from a fresh clone
+
+Run these commands in a native macOS terminal with Metal GPU access. The exact synthetic RULER manifests are included in Git; you do not need to generate data or clone RULER for this quick start. Model weights are downloaded separately into the Hugging Face cache, outside this repository.
 
 ```bash
-# 1. Environment (pinned by uv.lock)
-uv sync --all-groups
+# 1. Clone and install the locked environment
+git clone https://github.com/sai-krishna867/kv-cache.git
+cd kv-cache
+uv sync --locked --all-groups
 
-# 2. Model, at the pinned revision (explicit download; nothing downloads during validate/run)
+# 2. Verify the bundled data before running
+uv run python scripts/verify_datasets.py
+
+# 3. Model, at the pinned revision (about 8 GB; explicit download)
 uv run hf download Qwen/Qwen3-4B --revision 1cfa9a7208912126459214e8b04321603b3df60c
 
-# 3. RULER generator, at the pinned commit
-git clone https://github.com/NVIDIA/RULER data/upstream/RULER
-git -C data/upstream/RULER checkout db43f92ff634bbce1c33d1fb15858aec4bba509a
-
-# 4. Generate RULER examples with the model's tokenizer -> versioned dev/test split manifests
-uv run kvstudy prepare ruler \
-  --model-id Qwen/Qwen3-4B --revision 1cfa9a7208912126459214e8b04321603b3df60c \
-  --tasks niah_single_1 vt --lengths 4096 8192 16384 --num-samples 25 --seed 42 \
-  --out-dir data/manifests/ruler_qwen3-4b_s42
-
-# 5. Validate (checks files, prints the expanded run count), then run
+# 4. Validate, then run: 6 dev examples x 2 methods = 12 evaluations
 uv run kvstudy validate configs/smoke.yaml
 uv run kvstudy run configs/smoke.yaml
 
-# 6. Re-summarize saved results without the model (per-method summaries, paired diffs vs BF16 with bootstrap CIs)
+# 5. Replace <dated_run_id> with the directory printed by the run command
 uv run kvstudy analyze results/smoke/<dated_run_id>
 
 # If a run is interrupted, continue it in the same directory
 uv run kvstudy resume results/smoke/<dated_run_id>
 uv run kvstudy resume results/smoke/<dated_run_id> --retry-failed   # also rerun failed/oom records
 ```
+
+To reproduce the original uniform development sweep on the bundled data:
+
+```bash
+uv run kvstudy validate configs/uniform_sweep.yaml
+uv run kvstudy run configs/uniform_sweep.yaml
+```
+
+This evaluates 31 dev examples against nine configurations (279 evaluations). `configs/baseline.yaml` evaluates the same 31 examples with BF16 only. Preserve the 119 bundled test examples for the final evaluation; do not use them to select methods or hyperparameters.
+
+The current experiments simulate low-bit numerical errors but store dequantized cache values in BF16. Their memory estimates are not measured savings, and their timings are not packed-cache performance measurements. Matching inputs does not guarantee bit-identical answers across different hardware or library versions.
+
+See [dataset provenance and regeneration](docs/datasets.md) for what is bundled, checksums, and preparation of larger datasets. Record the Git commit used for each reproduction. Raw run outputs remain local under `results/`.
 
 `resume` refuses to continue if anything that defines the experiment has changed. That covers:
 - the resolved config hash;
@@ -67,6 +77,11 @@ It skips (example, method) pairs that already have a record and removes an inter
 The pilot adds multi-key, multi-value and multi-query retrieval at 4K/8K/16K. Those tasks need RULER's Paul Graham essay haystack.
 
 ```bash
+# Required only for generating additional RULER data, not the quick start
+mkdir -p data/upstream
+git clone https://github.com/NVIDIA/RULER data/upstream/RULER
+git -C data/upstream/RULER checkout db43f92ff634bbce1c33d1fb15858aec4bba509a
+
 # Essay haystack (upstream script; its two scraping packages are used only for this command)
 (cd data/upstream/RULER/scripts/data/synthetic/json && \
   uv run --project ../../../../../../.. --with html2text==2024.2.26 --with beautifulsoup4==4.12.3 \
@@ -85,7 +100,7 @@ uv run kvstudy validate configs/ruler_pilot.yaml
 uv run kvstudy run configs/ruler_pilot.yaml
 ```
 
-The essay text is downloaded from the web, not pinned upstream. Its sha256 is recorded in each essay example's metadata.
+The essay text is downloaded from the web, not pinned upstream. Its sha256 is recorded in each essay example's metadata. After preparing the pilot, run `uv run python scripts/verify_datasets.py --all`: missing optional datasets are reported, and existing datasets must match the published fingerprints. A mismatch means the data is not an exact reproduction; preserve it under a new version rather than changing the published checksums.
 
 ## Results layout
 
@@ -130,4 +145,4 @@ uv run pytest -m integration                     # real Qwen tokenizer boundary;
 
 This project is licensed under Apache-2.0 (`LICENSE`).
 
-`src/kvstudy/benchmarks/_vendor/ruler_eval.py` contains scoring code copied verbatim from [NVIDIA/RULER](https://github.com/NVIDIA/RULER) (Apache-2.0, Copyright 2024 NVIDIA CORPORATION) at the commit pinned above. RULER data is generated by running the upstream generator from the pinned clone; it is not redistributed here.
+`src/kvstudy/benchmarks/_vendor/ruler_eval.py` contains scoring code copied verbatim from [NVIDIA/RULER](https://github.com/NVIDIA/RULER) (Apache-2.0, Copyright 2024 NVIDIA CORPORATION) at the commit pinned above. Bundled synthetic examples were produced with that generator; see [dataset provenance](docs/datasets.md). The project license does not replace the terms of third-party datasets. Essay-containing RULER manifests, LongBench documents, PG-19 books, and model weights are not bundled.

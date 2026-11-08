@@ -1,0 +1,161 @@
+{
+  "schema_version": 1,
+  "datasets": [
+    {
+      "path": "data/manifests/longbench_qwen3-4b/longbench_dev.jsonl",
+      "sha256": "b22231f3e26f224feb9e6fe54a60fdcaacc9d3ce681be62d6403f536126bce75",
+      "bytes": 6210111,
+      "examples": 170,
+      "bundled": false,
+      "tasks": [
+        "2wikimqa",
+        "hotpotqa",
+        "multifieldqa_en",
+        "musique",
+        "narrativeqa",
+        "qasper"
+      ],
+      "splits": [
+        "dev"
+      ]
+    },
+    {
+      "path": "data/manifests/longbench_qwen3-4b/longbench_test.jsonl",
+      "sha256": "eac8e4204451e566cd7e480b77a34a0fcfca96bd15d13d1ab09ad8cc7d068625",
+      "bytes": 21049768,
+      "examples": 606,
+      "bundled": false,
+      "tasks": [
+        "2wikimqa",
+        "hotpotqa",
+        "multifieldqa_en",
+        "musique",
+        "narrativeqa",
+        "qasper"
+      ],
+      "splits": [
+        "test"
+      ]
+    },
+    {
+      "path": "data/manifests/pg19_qwen3-4b_s42/pg19_dev.jsonl",
+      "sha256": "983005e5730b70d927a05a769038cd07a7b0b52184af5b5e9dd90c3117b91b1f",
+      "bytes": 4958496,
+      "examples": 52,
+      "bundled": false,
+      "tasks": [
+        "continuation"
+      ],
+      "splits": [
+        "dev"
+      ]
+    },
+    {
+      "path": "data/manifests/pg19_qwen3-4b_s42/pg19_test.jsonl",
+      "sha256": "3c33715832cbffb03d90dddcd9a43925f2a41f0aabf3b59ced75756b14ca0e92",
+      "bytes": 22625522,
+      "examples": 233,
+      "bundled": false,
+      "tasks": [
+        "continuation"
+      ],
+      "splits": [
+        "test"
+      ]
+    },
+    {
+      "path": "data/manifests/ruler_qwen3-4b_hard_s42/ruler_dev.jsonl",
+      "sha256": "72412ed4cc5183247fcc7b00c3ed3a40af6faaa05a67406c454a1d4893a35ef9",
+      "bytes": 2187203,
+      "examples": 73,
+      "bundled": false,
+      "tasks": [
+        "niah_multikey_2",
+        "niah_multikey_3",
+        "qa_1",
+        "qa_2"
+      ],
+      "splits": [
+        "dev"
+      ]
+    },
+    {
+      "path": "data/manifests/ruler_qwen3-4b_hard_s42/ruler_test.jsonl",
+      "sha256": "90041511d649d4bcf84f07e84385e25c6b135e67710fac7f3499513cbbeb8f4a",
+      "bytes": 6915960,
+      "examples": 227,
+      "bundled": false,
+      "tasks": [
+        "niah_multikey_2",
+        "niah_multikey_3",
+        "qa_1",
+        "qa_2"
+      ],
+      "splits": [
+        "test"
+      ]
+    },
+    {
+      "path": "data/manifests/ruler_qwen3-4b_pilot_s42/ruler_dev.jsonl",
+      "sha256": "65eeeeb6952e82425577226f64efff083ec2535070e09b7239a8cb66966fc887",
+      "bytes": 5885961,
+      "examples": 147,
+      "bundled": false,
+      "tasks": [
+        "niah_multikey_1",
+        "niah_multiquery",
+        "niah_multivalue",
+        "niah_single_1",
+        "vt"
+      ],
+      "splits": [
+        "dev"
+      ]
+    },
+    {
+      "path": "data/manifests/ruler_qwen3-4b_pilot_s42/ruler_test.jsonl",
+      "sha256": "9b12c4f826c09f18cf0f0e8256f6ea3741cac68158cecb8075d0e221500eb445",
+      "bytes": 24749248,
+      "examples": 603,
+      "bundled": false,
+      "tasks": [
+        "niah_multikey_1",
+        "niah_multiquery",
+        "niah_multivalue",
+        "niah_single_1",
+        "vt"
+      ],
+      "splits": [
+        "test"
+      ]
+    },
+    {
+      "path": "data/manifests/ruler_qwen3-4b_s42/ruler_dev.jsonl",
+      "sha256": "87f5185729a680f942b8b62b0a7e61e9b8f30d950f994530ed9f13d5c635b9bb",
+      "bytes": 1106792,
+      "examples": 31,
+      "bundled": true,
+      "tasks": [
+        "niah_single_1",
+        "vt"
+      ],
+      "splits": [
+        "dev"
+      ]
+    },
+    {
+      "path": "data/manifests/ruler_qwen3-4b_s42/ruler_test.jsonl",
+      "sha256": "e886b304762f58950e2333f26850863a2bf82992fa73904ba88d39af0541ab28",
+      "bytes": 4350106,
+      "examples": 119,
+      "bundled": true,
+      "tasks": [
+        "niah_single_1",
+        "vt"
+      ],
+      "splits": [
+        "test"
+      ]
+    }
+  ]
+}
