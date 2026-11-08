@@ -1,0 +1,43 @@
+schema_version: 1
+name: smoke
+
+model:
+  backend: mlx
+  id: Qwen/Qwen3-4B
+  revision: 1cfa9a7208912126459214e8b04321603b3df60c
+  weight_dtype: bfloat16
+
+execution:
+  mode: quality_simulated
+  seed: 42
+
+protocol:
+  prefill_dtype: bfloat16
+  conversion_point: after_context_before_question
+  key_position: post_rope
+  protected_window:
+    tokens: 512
+    precision_bits: 8
+    overflow: demote_oldest
+
+benchmarks:
+  - name: ruler
+    split_manifest: data/manifests/ruler_qwen3-4b_s42/ruler_dev.jsonl
+    tasks: [niah_single_1, vt]
+    context_lengths: [4096]
+    max_new_tokens: 128
+    max_examples_per_cell: 3
+
+methods:
+  - id: bf16
+    kind: identity
+
+  - id: uniform_4bit
+    kind: uniform
+    key_bits: 4
+    value_bits: 4
+    group_size: 64
+    axis: per_token
+
+output:
+  root: results

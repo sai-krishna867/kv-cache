@@ -1,0 +1,59 @@
+# Dev pilot: BF16 vs uniform 4/3/2-bit on a larger RULER dev split that adds
+# multi-key, multi-value and multi-query retrieval. Same protected window for
+# every compressed method. Effective bits per element = bits + 32 / group_size.
+schema_version: 1
+name: ruler_pilot
+
+model:
+  backend: mlx
+  id: Qwen/Qwen3-4B
+  revision: 1cfa9a7208912126459214e8b04321603b3df60c
+  weight_dtype: bfloat16
+
+execution:
+  mode: quality_simulated
+  seed: 42
+
+protocol:
+  prefill_dtype: bfloat16
+  conversion_point: after_context_before_question
+  key_position: post_rope
+  protected_window:
+    tokens: 512
+    precision_bits: 8
+    overflow: demote_oldest
+
+benchmarks:
+  - name: ruler
+    split_manifest: data/manifests/ruler_qwen3-4b_pilot_s42/ruler_dev.jsonl
+    tasks: [niah_single_1, vt, niah_multikey_1, niah_multivalue, niah_multiquery]
+    context_lengths: [4096, 8192, 16384]
+    max_new_tokens: 128
+
+methods:
+  - id: B0          # bf16, 16 bits
+    kind: identity
+
+  - id: U4          # 4.5
+    kind: uniform
+    key_bits: 4
+    value_bits: 4
+    group_size: 64
+    axis: per_token
+
+  - id: U3          # 3.5
+    kind: uniform
+    key_bits: 3
+    value_bits: 3
+    group_size: 64
+    axis: per_token
+
+  - id: U2          # 2.5
+    kind: uniform
+    key_bits: 2
+    value_bits: 2
+    group_size: 64
+    axis: per_token
+
+output:
+  root: results

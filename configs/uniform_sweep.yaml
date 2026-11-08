@@ -1,0 +1,93 @@
+# Phase 1: uniform low precision (experiment design, Phase 1 table), on the RULER dev split.
+# Effective bits per element = bits + 32 / group_size (bf16 scale and bias per group).
+schema_version: 1
+name: uniform_sweep
+
+model:
+  backend: mlx
+  id: Qwen/Qwen3-4B
+  revision: 1cfa9a7208912126459214e8b04321603b3df60c
+  weight_dtype: bfloat16
+
+execution:
+  mode: quality_simulated
+  seed: 42
+
+protocol:
+  prefill_dtype: bfloat16
+  conversion_point: after_context_before_question
+  key_position: post_rope
+  protected_window:
+    tokens: 512
+    precision_bits: 8
+    overflow: demote_oldest
+
+benchmarks:
+  - name: ruler
+    split_manifest: data/manifests/ruler_qwen3-4b_s42/ruler_dev.jsonl
+    tasks: [niah_single_1, vt]
+    context_lengths: [4096, 8192, 16384]
+    max_new_tokens: 128
+
+methods:
+  - id: B0          # bf16, 16 bits
+    kind: identity
+
+  - id: U8          # 8.5 effective bits
+    kind: uniform
+    key_bits: 8
+    value_bits: 8
+    group_size: 64
+    axis: per_token
+
+  - id: A84         # 6.5: keys get more bits
+    kind: uniform
+    key_bits: 8
+    value_bits: 4
+    group_size: 64
+    axis: per_token
+
+  - id: A48         # 6.5: values get more bits
+    kind: uniform
+    key_bits: 4
+    value_bits: 8
+    group_size: 64
+    axis: per_token
+
+  - id: U5          # 5.5
+    kind: uniform
+    key_bits: 5
+    value_bits: 5
+    group_size: 64
+    axis: per_token
+
+  - id: U4g32       # 5.0
+    kind: uniform
+    key_bits: 4
+    value_bits: 4
+    group_size: 32
+    axis: per_token
+
+  - id: U4          # 4.5
+    kind: uniform
+    key_bits: 4
+    value_bits: 4
+    group_size: 64
+    axis: per_token
+
+  - id: U3          # 3.5
+    kind: uniform
+    key_bits: 3
+    value_bits: 3
+    group_size: 64
+    axis: per_token
+
+  - id: U2          # 2.5
+    kind: uniform
+    key_bits: 2
+    value_bits: 2
+    group_size: 64
+    axis: per_token
+
+output:
+  root: results

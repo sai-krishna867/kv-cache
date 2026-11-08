@@ -1,0 +1,33 @@
+# Headroom check: BF16 only on harder RULER tasks (decoy-needle multi-key, QA),
+# to find cells inside the design's 10-95% band before any quantized sweep.
+schema_version: 1
+name: ruler_hard_baseline
+
+model:
+  backend: mlx
+  id: Qwen/Qwen3-4B
+  revision: 1cfa9a7208912126459214e8b04321603b3df60c
+  weight_dtype: bfloat16
+
+execution:
+  mode: quality_simulated
+  seed: 42
+
+protocol:
+  prefill_dtype: bfloat16
+  conversion_point: after_context_before_question
+  key_position: post_rope
+
+benchmarks:
+  - name: ruler
+    split_manifest: data/manifests/ruler_qwen3-4b_hard_s42/ruler_dev.jsonl
+    tasks: [niah_multikey_2, niah_multikey_3, qa_1, qa_2]
+    context_lengths: [4096, 8192, 16384]
+    max_new_tokens: 128
+
+methods:
+  - id: B0
+    kind: identity
+
+output:
+  root: results

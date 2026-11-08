@@ -1,0 +1,37 @@
+[project]
+name = "kvstudy"
+version = "0.1.0"
+description = "KV-cache quantization and selective-precision research harness"
+readme = "README.md"
+license = "Apache-2.0"
+requires-python = ">=3.11"
+dependencies = [
+    "mlx",
+    "mlx-lm",
+    "pydantic>=2",
+    "pyyaml",
+    "huggingface_hub",
+    "numpy",
+]
+
+[project.scripts]
+kvstudy = "kvstudy.cli:main"
+
+[dependency-groups]
+dev = ["pytest"]
+# Dependencies of the upstream RULER data generator (data/upstream/RULER/scripts/data).
+prepare = ["wonderwords", "nltk", "tqdm", "transformers", "tenacity"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/kvstudy"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "mlx: needs Apple-silicon MLX; no downloads",
+    "integration: needs the downloaded model or the RULER clone; skipped if absent",
+]
